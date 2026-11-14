@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var progress: ProgressBar
+    private lateinit var transferInfo: TextView
     private lateinit var qrImage: ImageView
     private lateinit var receiverAddress: TextView
     @Volatile private var serverSocket: ServerSocket? = null
@@ -136,7 +137,15 @@ class MainActivity : Activity() {
         }
         root.addView(progress, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 12
-        ).apply { topMargin = 14; bottomMargin = 10 })
+        ).apply { topMargin = 14; bottomMargin = 6 })
+
+        transferInfo = TextView(this).apply {
+            text = "سرعت و جزئیات انتقال اینجا نمایش داده می‌شود."
+            textSize = 12f
+            setTextColor(0xFF52615D.toInt())
+            gravity = Gravity.CENTER
+        }
+        root.addView(transferInfo, matchWrap())
 
         status = TextView(this).apply {
             text = "هر دو گوشی را به یک Wi-Fi یا هات‌اسپات وصل کنید."
@@ -216,6 +225,8 @@ class MainActivity : Activity() {
                 }
                 val totalBytes = prepared.sumOf { it.third }.coerceAtLeast(1L)
                 var totalSent = 0L
+                val transferStarted = System.nanoTime()
+                var lastUiUpdate = transferStarted
                 Socket(host, PORT).use { socket ->
                     socket.tcpNoDelay = true
                     val output = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
@@ -230,14 +241,21 @@ class MainActivity : Activity() {
                                 val count = input.read(buffer, 0, minOf(buffer.size.toLong(), size - fileSent).toInt())
                                 if (count < 0) throw IllegalStateException("خواندن فایل «$name» ناقص بود.")
                                 output.write(buffer, 0, count); fileSent += count; totalSent += count
-                                val percent = ((totalSent * 100) / totalBytes).toInt().coerceIn(0, 100)
-                                runOnUiThread { progress.progress = percent }
+                                val now = System.nanoTime()
+                                if (now - lastUiUpdate >= 250_000_000L || totalSent == totalBytes) {
+                                    val percent = ((totalSent * 100) / totalBytes).toInt().coerceIn(0, 100)
+                                    val seconds = ((now - transferStarted).coerceAtLeast(1L)) / 1_000_000_000.0
+                                    val speed = totalSent / seconds
+                                    val detail = "${formatBytes(totalSent)} / ${formatBytes(totalBytes)}  •  ${formatBytes(speed.toLong())}/ثانیه"
+                                    runOnUiThread { progress.progress = percent; transferInfo.text = detail }
+                                    lastUiUpdate = now
+                                }
                             }
                         } ?: throw IllegalStateException("فایل «$name» قابل خواندن نیست.")
                     }
                     output.flush()
                 }
-                runOnUiThread { status.text = "ارسال هر ${prepared.size} فایل با موفقیت انجام شد."; progress.progress = 100 }
+                runOnUiThread { status.text = "ارسال هر ${prepared.size} فایل با موفقیت انجام شد."; progress.progress = 100; transferInfo.text = "ارسال کامل شد • ${formatBytes(totalBytes)}" }
             } catch (e: Exception) { runOnUiThread { status.text = "خطا در ارسال: ${e.localizedMessage ?: "اتصال برقرار نشد"}" } }
         }
     }
@@ -308,7 +326,10 @@ class MainActivity : Activity() {
                     val nameLength = input.readInt()
                     require(nameLength in 1..1024) { "نام فایل نامعتبر است." }
                     val nameBytes = ByteArray(nameLength); input.readFully(nameBytes)
-                    val safeName = String(nameBytes, Charsets.UTF_8).substringAfterLast('/').substringAfterLast('\\').replace(Regex("[^A-Za-z0-9._ -]"), "_").ifBlank { "received-file" }
+                    val safeName = String(nameBytes, Charsets.UTF_8)
+                        .substringAfterLast('/').substringAfterLast('\\')
+                        .replace(Regex("[\\u0000-\\u001F\\u007F]"), "_")
+                        .take(180).ifBlank { "received-file" }
                     val size = input.readLong()
                     require(size >= 0L) { "اندازه فایل نامعتبر است." }
                     val values = ContentValues().apply {
@@ -319,12 +340,27 @@ class MainActivity : Activity() {
                     }
                     val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw IllegalStateException("امکان ساخت فایل مقصد وجود ندارد.")
                     try {
+                        val fileStarted = System.nanoTime()
+                        var lastUiUpdate = fileStarted
+                        var received = 0L
                         contentResolver.openOutputStream(uri)?.use { output ->
                             val buffer = ByteArray(BUFFER_SIZE); var remaining = size
                             while (remaining > 0) {
                                 val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
                                 if (count < 0) throw IllegalStateException("انتقال فایل «$safeName» ناقص بود.")
-                                output.write(buffer, 0, count); remaining -= count
+                                output.write(buffer, 0, count); remaining -= count; received += count
+                                val now = System.nanoTime()
+                                if (now - lastUiUpdate >= 250_000_000L || remaining == 0L) {
+                                    val percent = ((received * 100) / size.coerceAtLeast(1L)).toInt().coerceIn(0, 100)
+                                    val seconds = ((now - fileStarted).coerceAtLeast(1L)) / 1_000_000_000.0
+                                    val speed = received / seconds
+                                    runOnUiThread {
+                                        progress.visibility = View.VISIBLE
+                                        progress.progress = percent
+                                        transferInfo.text = "$safeName • ${formatBytes(received)} / ${formatBytes(size)} • ${formatBytes(speed.toLong())}/ثانیه"
+                                    }
+                                    lastUiUpdate = now
+                                }
                             }
                         } ?: throw IllegalStateException("امکان نوشتن فایل وجود ندارد.")
                         val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
@@ -337,6 +373,15 @@ class MainActivity : Activity() {
             } catch (e: Exception) { runOnUiThread { status.text = "خطا در دریافت فایل‌ها: ${e.localizedMessage}" } }
         }
     }
+    private fun formatBytes(bytes: Long): String {
+        if (bytes < 1024L) return "$bytes B"
+        val units = arrayOf("KB", "MB", "GB", "TB")
+        var value = bytes.toDouble()
+        var unit = -1
+        do { value /= 1024.0; unit++ } while (value >= 1024.0 && unit < units.lastIndex)
+        return String.format(java.util.Locale.US, "%.1f %s", value, units[unit])
+    }
+
     private fun queryDisplayName(uri: android.net.Uri): String? {
         contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { cursor ->
