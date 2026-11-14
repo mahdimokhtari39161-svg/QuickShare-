@@ -111,7 +111,7 @@ class MainActivity : Activity() {
         ipInput = EditText(this).apply {
             hint = "IP گیرنده یا اسکن کد QR"
             textSize = 14f
-            singleLine = true
+            setSingleLine(true)
             inputType = android.text.InputType.TYPE_CLASS_TEXT
         }
         root.addView(ipInput, matchWrap())
