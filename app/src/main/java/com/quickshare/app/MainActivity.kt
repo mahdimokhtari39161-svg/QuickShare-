@@ -42,6 +42,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val PICK_FILE = 1001
+        private const val CAMERA_PERMISSION_REQUEST = 1002
         private const val MAX_FILES_PER_BATCH = 100
         private const val PORT = 8988
         private const val BUFFER_SIZE = 64 * 1024
@@ -152,14 +153,7 @@ class MainActivity : Activity() {
             textSize = 14f
             setTextColor(0xFFFFFFFF.toInt())
             background = rounded(0xFF5367D9.toInt(), 14)
-            setOnClickListener {
-                IntentIntegrator(this@MainActivity).apply {
-                    setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-                    setPrompt("کد QR گوشی گیرنده را اسکن کنید")
-                    setBeepEnabled(false)
-                    setOrientationLocked(false)
-                }.initiateScan()
-            }
+            setOnClickListener { startQrScanner() }
         }
         connectCard.addView(scanButton, matchWrap())
         root.addView(connectCard, matchWrap().apply { bottomMargin = dp(14) })
@@ -301,6 +295,51 @@ class MainActivity : Activity() {
         LinearLayout.LayoutParams.MATCH_PARENT,
         LinearLayout.LayoutParams.WRAP_CONTENT
     ).apply { bottomMargin = 8 }
+
+    private fun startQrScanner() {
+        if (android.os.Build.VERSION.SDK_INT >= 23 &&
+            checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(android.Manifest.permission.CAMERA),
+                CAMERA_PERMISSION_REQUEST
+            )
+            return
+        }
+        launchQrScanner()
+    }
+
+    private fun launchQrScanner() {
+        try {
+            IntentIntegrator(this).apply {
+                setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                setPrompt("کد QR گوشی گیرنده را اسکن کنید")
+                setBeepEnabled(false)
+                setOrientationLocked(false)
+            }.initiateScan()
+        } catch (e: Exception) {
+            status.text = "باز کردن دوربین ناموفق بود: ${e.localizedMessage ?: "خطای ناشناخته"}"
+            Toast.makeText(this, "دسترسی دوربین را در تنظیمات برنامه بررسی کنید.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == CAMERA_PERMISSION_REQUEST) {
+            if (grantResults.isNotEmpty() &&
+                grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                launchQrScanner()
+            } else {
+                status.text = "برای اسکن QR باید مجوز دوربین را فعال کنید."
+                Toast.makeText(this, "مجوز دوربین برای اسکن کد لازم است.", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     private fun chooseFile() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
