@@ -31,7 +31,7 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
     private val executor = Executors.newCachedThreadPool()
-    private var selectedUri: android.net.Uri? = null
+    private val selectedUris = mutableListOf<android.net.Uri>()
     private lateinit var status: TextView
     private lateinit var ipInput: EditText
     private lateinit var progress: ProgressBar
@@ -41,6 +41,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val PICK_FILE = 1001
+        private const val MAX_FILES_PER_BATCH = 100
         private const val PORT = 8988
         private const val BUFFER_SIZE = 64 * 1024
     }
@@ -114,12 +115,12 @@ class MainActivity : Activity() {
         }, matchWrap())
 
         root.addView(Button(this).apply {
-            text = "انتخاب فایل"
+            text = "انتخاب چند فایل"
             setOnClickListener { chooseFile() }
         }, matchWrap())
 
         root.addView(Button(this).apply {
-            text = "ارسال فایل"
+            text = "ارسال فایل‌های انتخاب‌شده"
             setOnClickListener { sendSelectedFile() }
         }, matchWrap())
 
@@ -157,6 +158,7 @@ class MainActivity : Activity() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
         }
         startActivityForResult(intent, PICK_FILE)
     }
@@ -179,69 +181,66 @@ class MainActivity : Activity() {
                 status.text = "اسکن کد QR لغو شد."
             }
         } else if (requestCode == PICK_FILE && resultCode == RESULT_OK) {
-            selectedUri = data?.data
-            status.text = if (selectedUri != null) "فایل انتخاب شد؛ برای ارسال آماده است." else "فایلی انتخاب نشد."
-            selectedUri?.let { uri ->
+            selectedUris.clear()
+            data?.clipData?.let { clip ->
+                for (i in 0 until minOf(clip.itemCount, MAX_FILES_PER_BATCH)) {
+                    clip.getItemAt(i).uri?.let { selectedUris.add(it) }
+                }
+            } ?: data?.data?.let { selectedUris.add(it) }
+            selectedUris.forEach { uri ->
                 try {
                     contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 } catch (_: Exception) { }
             }
+            status.text = if (selectedUris.isNotEmpty()) {
+                "${selectedUris.size} فایل انتخاب شد؛ برای ارسال آماده است."
+            } else "فایلی انتخاب نشد."
         }
     }
 
     private fun sendSelectedFile() {
-        val uri = selectedUri
+        val files = selectedUris.toList()
         val host = ipInput.text.toString().trim()
-        if (uri == null) {
-            Toast.makeText(this, "ابتدا یک فایل انتخاب کنید.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (host.isBlank()) {
-            ipInput.error = "ابتدا IP را وارد یا QR را اسکن کنید"
-            return
-        }
-
+        if (files.isEmpty()) { Toast.makeText(this, "ابتدا یک یا چند فایل انتخاب کنید.", Toast.LENGTH_SHORT).show(); return }
+        if (host.isBlank()) { ipInput.error = "ابتدا IP را وارد یا QR را اسکن کنید"; return }
         progress.visibility = View.VISIBLE
         progress.progress = 0
-        status.text = "در حال اتصال به گیرنده…"
-
+        status.text = "در حال اتصال برای ارسال ${files.size} فایل…"
         executor.execute {
             try {
-                val name = queryDisplayName(uri) ?: "shared-file"
-                val size = querySize(uri)
+                val prepared = files.map { uri ->
+                    val name = queryDisplayName(uri) ?: "shared-file"
+                    val size = querySize(uri)
+                    if (size < 0L) throw IllegalStateException("اندازه فایل «$name» مشخص نیست؛ فایل را از حافظه داخلی انتخاب کنید.")
+                    Triple(uri, name, size)
+                }
+                val totalBytes = prepared.sumOf { it.third }.coerceAtLeast(1L)
+                var totalSent = 0L
                 Socket(host, PORT).use { socket ->
                     socket.tcpNoDelay = true
                     val output = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
-                    val nameBytes = name.toByteArray(Charsets.UTF_8)
-                    output.writeInt(nameBytes.size)
-                    output.write(nameBytes)
-                    output.writeLong(size)
-                    contentResolver.openInputStream(uri)?.use { input ->
-                        val buffer = ByteArray(BUFFER_SIZE)
-                        var sent = 0L
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            output.write(buffer, 0, count)
-                            sent += count
-                            if (size > 0) {
-                                val percent = ((sent * 100) / size).toInt().coerceIn(0, 100)
+                    output.writeInt(prepared.size)
+                    prepared.forEach { (uri, name, size) ->
+                        val nameBytes = name.toByteArray(Charsets.UTF_8)
+                        output.writeInt(nameBytes.size); output.write(nameBytes); output.writeLong(size)
+                        contentResolver.openInputStream(uri)?.use { input ->
+                            val buffer = ByteArray(BUFFER_SIZE)
+                            var fileSent = 0L
+                            while (fileSent < size) {
+                                val count = input.read(buffer, 0, minOf(buffer.size.toLong(), size - fileSent).toInt())
+                                if (count < 0) throw IllegalStateException("خواندن فایل «$name» ناقص بود.")
+                                output.write(buffer, 0, count); fileSent += count; totalSent += count
+                                val percent = ((totalSent * 100) / totalBytes).toInt().coerceIn(0, 100)
                                 runOnUiThread { progress.progress = percent }
                             }
-                        }
-                        output.flush()
-                    } ?: throw IllegalStateException("فایل قابل خواندن نیست.")
+                        } ?: throw IllegalStateException("فایل «$name» قابل خواندن نیست.")
+                    }
+                    output.flush()
                 }
-                runOnUiThread {
-                    status.text = "ارسال فایل انجام شد."
-                    progress.progress = 100
-                }
-            } catch (e: Exception) {
-                runOnUiThread { status.text = "خطا در ارسال: ${e.localizedMessage ?: "اتصال برقرار نشد"}" }
-            }
+                runOnUiThread { status.text = "ارسال هر ${prepared.size} فایل با موفقیت انجام شد."; progress.progress = 100 }
+            } catch (e: Exception) { runOnUiThread { status.text = "خطا در ارسال: ${e.localizedMessage ?: "اتصال برقرار نشد"}" } }
         }
     }
-
     private fun startReceiving() {
         if (serverSocket != null) {
             status.text = "سرویس دریافت فعال است."
@@ -303,58 +302,41 @@ class MainActivity : Activity() {
         socket.use { client ->
             try {
                 val input = DataInputStream(BufferedInputStream(client.getInputStream()))
-                val nameLength = input.readInt()
-                require(nameLength in 1..1024) { "نام فایل نامعتبر است." }
-                val nameBytes = ByteArray(nameLength)
-                input.readFully(nameBytes)
-                val safeName = String(nameBytes, Charsets.UTF_8)
-                    .substringAfterLast('/')
-                    .substringAfterLast('\\')
-                    .replace(Regex("[^A-Za-z0-9._ -]"), "_")
-                    .ifBlank { "received-file" }
-                val size = input.readLong()
-                require(size >= -1L) { "اندازه فایل نامعتبر است." }
-
-                val values = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, safeName)
-                    put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
-                    put(MediaStore.Downloads.RELATIVE_PATH, "Download/QuickShare")
-                    put(MediaStore.Downloads.IS_PENDING, 1)
-                }
-                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                    ?: throw IllegalStateException("امکان ساخت فایل مقصد وجود ندارد.")
-                try {
-                    contentResolver.openOutputStream(uri)?.use { output ->
-                        val buffer = ByteArray(BUFFER_SIZE)
-                        if (size >= 0L) {
-                            var remaining = size
+                val fileCount = input.readInt()
+                require(fileCount in 1..MAX_FILES_PER_BATCH) { "تعداد فایل‌ها نامعتبر است." }
+                repeat(fileCount) { index ->
+                    val nameLength = input.readInt()
+                    require(nameLength in 1..1024) { "نام فایل نامعتبر است." }
+                    val nameBytes = ByteArray(nameLength); input.readFully(nameBytes)
+                    val safeName = String(nameBytes, Charsets.UTF_8).substringAfterLast('/').substringAfterLast('\\').replace(Regex("[^A-Za-z0-9._ -]"), "_").ifBlank { "received-file" }
+                    val size = input.readLong()
+                    require(size >= 0L) { "اندازه فایل نامعتبر است." }
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                        put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                        put(MediaStore.Downloads.RELATIVE_PATH, "Download/QuickShare")
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw IllegalStateException("امکان ساخت فایل مقصد وجود ندارد.")
+                    try {
+                        contentResolver.openOutputStream(uri)?.use { output ->
+                            val buffer = ByteArray(BUFFER_SIZE); var remaining = size
                             while (remaining > 0) {
                                 val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-                                if (count < 0) throw IllegalStateException("انتقال ناقص بود.")
-                                output.write(buffer, 0, count)
-                                remaining -= count
+                                if (count < 0) throw IllegalStateException("انتقال فایل «$safeName» ناقص بود.")
+                                output.write(buffer, 0, count); remaining -= count
                             }
-                        } else {
-                            while (true) {
-                                val count = input.read(buffer)
-                                if (count < 0) break
-                                output.write(buffer, 0, count)
-                            }
-                        }
-                    } ?: throw IllegalStateException("امکان نوشتن فایل وجود ندارد.")
-                    val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
-                    contentResolver.update(uri, done, null, null)
-                    runOnUiThread { status.text = "دریافت شد: $safeName" }
-                } catch (e: Exception) {
-                    contentResolver.delete(uri, null, null)
-                    throw e
+                        } ?: throw IllegalStateException("امکان نوشتن فایل وجود ندارد.")
+                        val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                        contentResolver.update(uri, done, null, null)
+                        val current = index + 1
+                        runOnUiThread { status.text = "دریافت $current از $fileCount: $safeName" }
+                    } catch (e: Exception) { contentResolver.delete(uri, null, null); throw e }
                 }
-            } catch (e: Exception) {
-                runOnUiThread { status.text = "خطا در دریافت فایل: ${e.localizedMessage}" }
-            }
+                runOnUiThread { status.text = "دریافت هر $fileCount فایل کامل شد؛ پوشه Download/QuickShare" }
+            } catch (e: Exception) { runOnUiThread { status.text = "خطا در دریافت فایل‌ها: ${e.localizedMessage}" } }
         }
     }
-
     private fun queryDisplayName(uri: android.net.Uri): String? {
         contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { cursor ->
