@@ -17,8 +17,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
+import com.google.zxing.integration.android.IntentIntegrator
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -39,20 +38,6 @@ class MainActivity : Activity() {
     private lateinit var qrImage: ImageView
     private lateinit var receiverAddress: TextView
     @Volatile private var serverSocket: ServerSocket? = null
-
-    private val qrScanner = registerForActivityResult(ScanContract()) { result ->
-        if (result.contents != null) {
-            val parts = result.contents.split("|")
-            if (parts.size == 3 && parts[0] == "QUICKSHARE" && parts[2].toIntOrNull() == PORT) {
-                ipInput.setText(parts[1])
-                status.text = "گوشی گیرنده شناسایی شد؛ حالا فایل را انتخاب و ارسال کنید."
-            } else {
-                status.text = "کد QR معتبر QuickShare نیست."
-            }
-        } else {
-            status.text = "اسکن کد QR لغو شد."
-        }
-    }
 
     companion object {
         private const val PICK_FILE = 1001
@@ -119,13 +104,12 @@ class MainActivity : Activity() {
         root.addView(Button(this).apply {
             text = "اسکن کد QR گیرنده"
             setOnClickListener {
-                val options = ScanOptions().apply {
-                    setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                IntentIntegrator(this@MainActivity).apply {
+                    setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
                     setPrompt("کد QR گوشی گیرنده را اسکن کنید")
                     setBeepEnabled(false)
                     setOrientationLocked(false)
-                }
-                qrScanner.launch(options)
+                }.initiateScan()
             }
         }, matchWrap())
 
@@ -180,7 +164,21 @@ class MainActivity : Activity() {
     @Deprecated("Kept compatible with the platform-only MVP.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == PICK_FILE && resultCode == RESULT_OK) {
+        if (requestCode == IntentIntegrator.REQUEST_CODE) {
+            val scan = IntentIntegrator.parseActivityResult(requestCode, resultCode, data)
+            val contents = scan?.contents
+            if (contents != null) {
+                val parts = contents.split("|")
+                if (parts.size == 3 && parts[0] == "QUICKSHARE" && parts[2].toIntOrNull() == PORT) {
+                    ipInput.setText(parts[1])
+                    status.text = "گوشی گیرنده شناسایی شد؛ حالا فایل را انتخاب و ارسال کنید."
+                } else {
+                    status.text = "کد QR معتبر QuickShare نیست."
+                }
+            } else {
+                status.text = "اسکن کد QR لغو شد."
+            }
+        } else if (requestCode == PICK_FILE && resultCode == RESULT_OK) {
             selectedUri = data?.data
             status.text = if (selectedUri != null) "فایل انتخاب شد؛ برای ارسال آماده است." else "فایلی انتخاب نشد."
             selectedUri?.let { uri ->
