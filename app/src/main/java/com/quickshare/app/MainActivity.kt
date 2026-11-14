@@ -52,59 +52,106 @@ class MainActivity : Activity() {
         buildScreen()
     }
 
+    private var darkMode = false
+
     private fun buildScreen() {
+        darkMode = getSharedPreferences("quickshare_ui", MODE_PRIVATE).getBoolean("dark_mode", false)
+        val bg = if (darkMode) 0xFF101827.toInt() else 0xFFF2F6FC.toInt()
+        val surface = if (darkMode) 0xFF1B2638.toInt() else 0xFFFFFFFF.toInt()
+        val primaryText = if (darkMode) 0xFFF2F6FF.toInt() else 0xFF14233B.toInt()
+        val secondaryText = if (darkMode) 0xFFB0BED2.toInt() else 0xFF65758B.toInt()
+        val accent = 0xFF2684FF.toInt()
+
+        val scroll = android.widget.ScrollView(this).apply {
+            setFillViewport(true)
+            setBackgroundColor(bg)
+            clipToPadding = false
+        }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(28, 28, 28, 24)
-            gravity = Gravity.CENTER_HORIZONTAL
-            setBackgroundColor(0xFFF5F7F6.toInt())
+            setPadding(dp(18), dp(18), dp(18), dp(28))
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
 
-        root.addView(TextView(this).apply {
-            text = "QuickShare"
-            textSize = 30f
-            setTextColor(0xFF102F2A.toInt())
+        val hero = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-        }, matchWrap())
-
-        root.addView(TextView(this).apply {
-            text = "انتقال فایل در شبکه محلی، بدون فضای ابری"
-            textSize = 15f
-            setTextColor(0xFF52615D.toInt())
-            gravity = Gravity.CENTER
-            setPadding(0, 8, 0, 14)
-        }, matchWrap())
-
-        receiverAddress = TextView(this).apply {
-            text = "برای دریافت، دکمه شروع دریافت را بزنید."
-            textSize = 13f
-            gravity = Gravity.CENTER
-            setTextColor(0xFF52615D.toInt())
+            setPadding(dp(22), dp(24), dp(22), dp(22))
+            background = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                intArrayOf(0xFF1677F2.toInt(), 0xFF6554D9.toInt(), 0xFF243B80.toInt())
+            ).apply { cornerRadius = dp(28).toFloat() }
         }
-        root.addView(receiverAddress, matchWrap())
-
-        qrImage = ImageView(this).apply {
-            visibility = View.GONE
-            adjustViewBounds = true
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(0xFFFFFFFF.toInt())
-            setPadding(12, 12, 12, 12)
-        }
-        root.addView(qrImage, LinearLayout.LayoutParams(220, 220).apply {
+        hero.addView(TextView(this).apply {
+            text = "↗"
+            textSize = 34f
             gravity = Gravity.CENTER
-            bottomMargin = 10
+            setTextColor(0xFFFFFFFF.toInt())
+            background = rounded(0x33FFFFFF, 60)
+            setPadding(dp(13), dp(5), dp(13), dp(5))
         })
+        hero.addView(TextView(this).apply {
+            text = "QuickShare"
+            textSize = 31f
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+            setTextColor(0xFFFFFFFF.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, dp(10), 0, dp(4))
+        })
+        hero.addView(TextView(this).apply {
+            text = "انتقال سریع و آسان فایل؛ مستقیم بین دو گوشی"
+            textSize = 14f
+            setTextColor(0xFFEAF2FF.toInt())
+            gravity = Gravity.CENTER
+        })
+        val themeButton = Button(this).apply {
+            text = if (darkMode) "☀  حالت روشن" else "☾  حالت تاریک"
+            textSize = 12f
+            setTextColor(0xFFFFFFFF.toInt())
+            background = rounded(0x334F6FFF, 40)
+            setPadding(dp(12), 0, dp(12), 0)
+            setOnClickListener {
+                darkMode = !darkMode
+                getSharedPreferences("quickshare_ui", MODE_PRIVATE).edit().putBoolean("dark_mode", darkMode).apply()
+                buildScreen()
+            }
+        }
+        hero.addView(themeButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, dp(42)
+        ).apply { topMargin = dp(14) })
+        root.addView(hero, matchWrap().apply { bottomMargin = dp(18) })
 
+        root.addView(sectionTitle("شروع انتقال", primaryText), matchWrap())
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        val sendCard = actionCard("↑", "ارسال فایل", "انتخاب و ارسال چند فایل", 0xFF1677F2.toInt(), surface)
+        sendCard.setOnClickListener { chooseFile() }
+        val receiveCard = actionCard("↓", "دریافت فایل", "نمایش QR برای اتصال", 0xFF16A085.toInt(), surface)
+        receiveCard.setOnClickListener { startReceiving() }
+        actions.addView(sendCard, LinearLayout.LayoutParams(0, dp(126), 1f).apply { marginEnd = dp(7) })
+        actions.addView(receiveCard, LinearLayout.LayoutParams(0, dp(126), 1f).apply { marginStart = dp(7) })
+        root.addView(actions, matchWrap().apply { bottomMargin = dp(16) })
+
+        val connectCard = panel(surface)
+        connectCard.addView(sectionTitle("اتصال به گوشی گیرنده", primaryText))
         ipInput = EditText(this).apply {
-            hint = "IP گیرنده یا اسکن کد QR"
+            hint = "آدرس IP گیرنده یا اسکن QR"
             textSize = 14f
             setSingleLine(true)
             inputType = android.text.InputType.TYPE_CLASS_TEXT
+            setTextColor(primaryText)
+            setHintTextColor(secondaryText)
+            background = rounded(if (darkMode) 0xFF26354B.toInt() else 0xFFF0F4FA.toInt(), 14)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
         }
-        root.addView(ipInput, matchWrap())
-
-        root.addView(Button(this).apply {
-            text = "اسکن کد QR گیرنده"
+        connectCard.addView(ipInput, matchWrap())
+        val scanButton = Button(this).apply {
+            text = "▦  اسکن کد QR"
+            textSize = 14f
+            setTextColor(0xFFFFFFFF.toInt())
+            background = rounded(0xFF5367D9.toInt(), 14)
             setOnClickListener {
                 IntentIntegrator(this@MainActivity).apply {
                     setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
@@ -113,50 +160,142 @@ class MainActivity : Activity() {
                     setOrientationLocked(false)
                 }.initiateScan()
             }
-        }, matchWrap())
+        }
+        connectCard.addView(scanButton, matchWrap())
+        root.addView(connectCard, matchWrap().apply { bottomMargin = dp(14) })
 
-        root.addView(Button(this).apply {
-            text = "انتخاب چند فایل"
+        val filesCard = panel(surface)
+        filesCard.addView(sectionTitle("فایل‌های ارسالی", primaryText))
+        val chooseButton = Button(this).apply {
+            text = "＋  انتخاب چند فایل"
+            textSize = 14f
+            setTextColor(accent)
+            background = rounded(if (darkMode) 0xFF203A5A.toInt() else 0xFFE8F1FF.toInt(), 14)
             setOnClickListener { chooseFile() }
-        }, matchWrap())
-
-        root.addView(Button(this).apply {
-            text = "ارسال فایل‌های انتخاب‌شده"
+        }
+        filesCard.addView(chooseButton, matchWrap())
+        val sendButton = Button(this).apply {
+            text = "ارسال فایل‌های انتخاب‌شده  ➤"
+            textSize = 15f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(0xFFFFFFFF.toInt())
+            background = rounded(0xFF1677F2.toInt(), 14)
             setOnClickListener { sendSelectedFile() }
-        }, matchWrap())
+        }
+        filesCard.addView(sendButton, matchWrap())
+        root.addView(filesCard, matchWrap().apply { bottomMargin = dp(14) })
 
-        root.addView(Button(this).apply {
-            text = "شروع دریافت و نمایش QR"
-            setOnClickListener { startReceiving() }
-        }, matchWrap())
+        val receiveCardPanel = panel(surface)
+        receiveCardPanel.addView(sectionTitle("کد اتصال و دریافت", primaryText))
+        receiverAddress = TextView(this).apply {
+            text = "برای دریافت فایل، دکمه «دریافت فایل» را بزنید."
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(secondaryText)
+            setPadding(dp(4), dp(4), dp(4), dp(10))
+        }
+        receiveCardPanel.addView(receiverAddress, matchWrap())
+        qrImage = ImageView(this).apply {
+            visibility = View.GONE
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            background = rounded(0xFFFFFFFF.toInt(), 18)
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+        }
+        receiveCardPanel.addView(qrImage, LinearLayout.LayoutParams(dp(210), dp(210)).apply {
+            gravity = Gravity.CENTER
+            bottomMargin = dp(10)
+        })
+        root.addView(receiveCardPanel, matchWrap().apply { bottomMargin = dp(14) })
 
+        val progressCard = panel(surface)
+        progressCard.addView(sectionTitle("وضعیت انتقال", primaryText))
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
             progress = 0
+            progressTintList = android.content.res.ColorStateList.valueOf(accent)
             visibility = View.GONE
         }
-        root.addView(progress, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 12
-        ).apply { topMargin = 14; bottomMargin = 6 })
-
+        progressCard.addView(progress, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(9)
+        ).apply { bottomMargin = dp(10) })
         transferInfo = TextView(this).apply {
-            text = "سرعت و جزئیات انتقال اینجا نمایش داده می‌شود."
-            textSize = 12f
-            setTextColor(0xFF52615D.toInt())
+            text = "سرعت و حجم انتقال اینجا نمایش داده می‌شود."
+            textSize = 13f
+            setTextColor(secondaryText)
             gravity = Gravity.CENTER
         }
-        root.addView(transferInfo, matchWrap())
-
+        progressCard.addView(transferInfo, matchWrap())
         status = TextView(this).apply {
             text = "هر دو گوشی را به یک Wi-Fi یا هات‌اسپات وصل کنید."
-            textSize = 14f
-            setTextColor(0xFF263A35.toInt())
+            textSize = 13f
+            setTextColor(primaryText)
             gravity = Gravity.CENTER
-            setPadding(0, 12, 0, 0)
+            setPadding(0, dp(8), 0, 0)
         }
-        root.addView(status, matchWrap())
-        setContentView(root)
+        progressCard.addView(status, matchWrap())
+        root.addView(progressCard, matchWrap())
+
+        scroll.addView(root)
+        setContentView(scroll)
     }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun rounded(color: Int, radiusDp: Int) =
+        android.graphics.drawable.GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radiusDp).toFloat()
+        }
+
+    private fun panel(color: Int) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(16), dp(15), dp(16), dp(12))
+        background = rounded(color, 22)
+        elevation = dp(2).toFloat()
+    }
+
+    private fun sectionTitle(value: String, color: Int) = TextView(this).apply {
+        text = value
+        textSize = 16f
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        setTextColor(color)
+        gravity = Gravity.RIGHT
+        setPadding(0, 0, 0, dp(12))
+    }
+
+    private fun actionCard(symbol: String, title: String, subtitle: String, accent: Int, surface: Int) =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(12), dp(8), dp(10))
+            background = rounded(surface, 20)
+            elevation = dp(2).toFloat()
+            isClickable = true
+            isFocusable = true
+            addView(TextView(this@MainActivity).apply {
+                text = symbol
+                textSize = 26f
+                gravity = Gravity.CENTER
+                setTextColor(0xFFFFFFFF.toInt())
+                background = rounded(accent, 50)
+                setPadding(dp(11), dp(2), dp(11), dp(2))
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                textSize = 15f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(if (darkMode) 0xFFF2F6FF.toInt() else 0xFF14233B.toInt())
+                gravity = Gravity.CENTER
+                setPadding(0, dp(7), 0, dp(2))
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = subtitle
+                textSize = 10f
+                setTextColor(if (darkMode) 0xFFB0BED2.toInt() else 0xFF65758B.toInt())
+                gravity = Gravity.CENTER
+            })
+        }
 
     private fun matchWrap() = LinearLayout.LayoutParams(
         LinearLayout.LayoutParams.MATCH_PARENT,
